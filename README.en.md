@@ -102,7 +102,7 @@ curl -fsSL https://raw.githubusercontent.com/matigumma/macbook-always-run-out-of
 
 ### From Claude Code / Claude Desktop (MCP)
 
-The [MCP server](mcp/README.md) is published on PyPI as [`diskclean-mcp`](https://pypi.org/project/diskclean-mcp/). Your agent can scan and clean using native tools, with all the safety guardrails (defaults to Trash, gates risky items).
+The [MCP server](mcp/README.md) is published on PyPI as [`diskclean-mcp`](https://pypi.org/project/diskclean-mcp/). Your agent can scan and clean using native tools — through a **mandatory 3-step flow** (`scan_disk` → `prepare_cleanup` → `execute_cleanup`) that makes it **impossible** to delete anything without you having seen the plan and consented explicitly. Details in [mcp/README.md → Safety model](mcp/README.md#safety-model).
 
 ```bash
 # Claude Code
