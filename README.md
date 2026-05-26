@@ -1,3 +1,5 @@
+[English](README.en.md) · **Español**
+
 # macbook-always-run-out-of-disk-space
 
 [![PyPI](https://img.shields.io/pypi/v/diskclean-mcp?label=mcp%20server)](https://pypi.org/project/diskclean-mcp/)
@@ -81,6 +83,8 @@ Items menores a 10 MB se ignoran para no ensuciar la lista.
 
 ## Uso
 
+### Como CLI interactivo
+
 ```bash
 git clone https://github.com/matigumma/macbook-always-run-out-of-disk-space.git
 cd macbook-always-run-out-of-disk-space
@@ -94,7 +98,39 @@ O en una línea, sin clonar:
 curl -fsSL https://raw.githubusercontent.com/matigumma/macbook-always-run-out-of-disk-space/main/diskclean.sh -o diskclean.sh && chmod +x diskclean.sh && ./diskclean.sh
 ```
 
-> **Nota:** algunos items requieren `sudo` (caches y logs de sistema). El script te lo va a pedir solo cuando hace falta.
+### Desde Claude Code / Claude Desktop (MCP)
+
+El [MCP server](mcp/README.md) está publicado en PyPI como [`diskclean-mcp`](https://pypi.org/project/diskclean-mcp/). Tu agent puede escanear y limpiar usando tools nativas, con todos los guardrails de seguridad (default a papelera, gate de items riesgosos).
+
+```bash
+# Claude Code
+claude mcp add diskclean -- uvx diskclean-mcp
+```
+
+Para Claude Desktop, agregá a `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "diskclean": { "command": "uvx", "args": ["diskclean-mcp"] }
+  }
+}
+```
+
+Después, en una conversación: *"escaneá mi disco y limpiá lo seguro"* — el agent invoca `scan_disk`, te muestra el resultado, y solo limpia después de tu confirmación.
+
+### Modo no-interactivo (scripting / cron)
+
+El script también acepta flags para integración con otras herramientas:
+
+```bash
+./diskclean.sh --json                              # escanea, imprime JSON
+./diskclean.sh --execute xcode-deriveddata,homebrew-cache --mode trash
+./diskclean.sh --execute android-sdk --confirm-risky
+./diskclean.sh --help                              # ver todas las opciones
+```
+
+> **Nota:** algunos items requieren `sudo` (caches y logs de sistema). En modo interactivo el script te lo pide cuando hace falta; en modo no-interactivo esos items fallan y se reportan como `failed`.
 
 ---
 
