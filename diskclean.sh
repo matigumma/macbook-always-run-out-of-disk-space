@@ -20,6 +20,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # ── Globals ──────────────────────────────────────────────────────────────────
+declare -a ITEM_IDS=()
 declare -a ITEM_NAMES=()
 declare -a ITEM_SIZES=()
 declare -a ITEM_SIZES_HR=()
@@ -32,6 +33,7 @@ ITEM_COUNT=0
 
 HOME_DIR="$HOME"
 TOTAL_RECLAIMABLE=0
+JSON_MODE=false
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +111,22 @@ register_item() {
         return
     fi
 
+    # Derive a stable ID slug, disambiguating collisions
+    local slug
+    slug=$(slugify "$name")
+    if [[ -z "$slug" ]]; then
+        slug="item-$((ITEM_COUNT + 1))"
+    fi
+    local final_slug="$slug"
+    local n=2
+    if (( ${#ITEM_IDS[@]} > 0 )); then
+        while [[ " ${ITEM_IDS[*]} " == *" $final_slug "* ]]; do
+            final_slug="${slug}-${n}"
+            n=$((n + 1))
+        done
+    fi
+
+    ITEM_IDS+=("$final_slug")
     ITEM_NAMES+=("$name")
     ITEM_SIZES+=("$size_bytes")
     ITEM_SIZES_HR+=("$(human_size "$size_bytes")")
@@ -153,8 +171,30 @@ ask_double_confirm() {
 # ── Scanner Functions ────────────────────────────────────────────────────────
 
 scan_spinner() {
+    if [[ "$JSON_MODE" == "true" ]]; then return; fi
     local msg="$1"
     printf "\r  ${DIM}🔍 Escaneando: %-50s${NC}" "$msg"
+}
+
+# Convert a human-readable name to a stable slug for use as an ID
+slugify() {
+    local s="$1"
+    s="${s//á/a}"; s="${s//é/e}"; s="${s//í/i}"; s="${s//ó/o}"; s="${s//ú/u}"
+    s="${s//Á/A}"; s="${s//É/E}"; s="${s//Í/I}"; s="${s//Ó/O}"; s="${s//Ú/U}"
+    s="${s//ñ/n}"; s="${s//Ñ/N}"
+    s=$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+    printf '%s' "$s"
+}
+
+# Escape a string for safe inclusion in a JSON value
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
 }
 
 scan_system_caches() {
@@ -1006,11 +1046,241 @@ execute_cleanup() {
     printf "    Espacio libre ahora: ${GREEN}${BOLD}%s${NC}\n\n" "$new_avail"
 }
 
+# ── Non-Interactive (JSON) Mode ──────────────────────────────────────────────
+
+output_json_scan() {
+    local disk_total disk_used disk_avail
+    disk_total=$(df -h / | awk 'NR==2{print $2}')
+    disk_used=$(df -h / | awk 'NR==2{print $3}')
+    disk_avail=$(df -h / | awk 'NR==2{print $4}')
+
+    printf '{\n'
+    printf '  "disk": {\n'
+    printf '    "total": "%s",\n' "$(json_escape "$disk_total")"
+    printf '    "used": "%s",\n' "$(json_escape "$disk_used")"
+    printf '    "available": "%s",\n' "$(json_escape "$disk_avail")"
+    printf '    "reclaimable_bytes": %d,\n' "$TOTAL_RECLAIMABLE"
+    printf '    "reclaimable_human": "%s"\n' "$(json_escape "$(human_size "$TOTAL_RECLAIMABLE")")"
+    printf '  },\n'
+    printf '  "items": ['
+
+    local i first=true
+    for ((i=0; i<ITEM_COUNT; i++)); do
+        if $first; then
+            printf '\n'
+            first=false
+        else
+            printf ',\n'
+        fi
+        local trashable_json="false"
+        [[ "${ITEM_TRASHABLE[$i]}" == "yes" ]] && trashable_json="true"
+        printf '    {'
+        printf '"id":"%s",' "$(json_escape "${ITEM_IDS[$i]}")"
+        printf '"index":%d,' $((i + 1))
+        printf '"name":"%s",' "$(json_escape "${ITEM_NAMES[$i]}")"
+        printf '"size_bytes":%d,' "${ITEM_SIZES[$i]}"
+        printf '"size_human":"%s",' "$(json_escape "${ITEM_SIZES_HR[$i]}")"
+        printf '"risk":"%s",' "${ITEM_RISKS[$i]}"
+        printf '"path":"%s",' "$(json_escape "${ITEM_PATHS[$i]}")"
+        printf '"command":"%s",' "$(json_escape "${ITEM_CMDS[$i]}")"
+        printf '"description":"%s",' "$(json_escape "${ITEM_DESCRIPTIONS[$i]}")"
+        printf '"trashable":%s' "$trashable_json"
+        printf '}'
+    done
+
+    if ! $first; then printf '\n  '; fi
+    printf ']\n'
+    printf '}\n'
+}
+
+# Append a result entry to the in-flight results array
+_append_result() {
+    EXEC_RESULTS+=("$1")
+}
+
+execute_by_ids() {
+    local ids_csv="$1"
+    local mode="${2:-trash}"        # trash or delete
+    local confirm_risky="${3:-false}"
+
+    declare -a EXEC_RESULTS=()
+    local succeeded=0 failed=0 skipped=0 space_freed=0
+
+    # Split IDs by comma
+    local IFS=','
+    local -a ids
+    read -ra ids <<< "$ids_csv"
+    unset IFS
+
+    for raw_id in "${ids[@]}"; do
+        # Trim whitespace
+        local requested_id="${raw_id#"${raw_id%%[![:space:]]*}"}"
+        requested_id="${requested_id%"${requested_id##*[![:space:]]}"}"
+        [[ -z "$requested_id" ]] && continue
+
+        # Find index by ID
+        local found=-1
+        local i
+        for ((i=0; i<ITEM_COUNT; i++)); do
+            if [[ "${ITEM_IDS[$i]}" == "$requested_id" ]]; then
+                found=$i
+                break
+            fi
+        done
+
+        if (( found < 0 )); then
+            _append_result "$(printf '{"id":"%s","success":false,"action":"not_found","message":"ID not present in current scan"}' "$(json_escape "$requested_id")")"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        local idx=$found
+        local id="${ITEM_IDS[$idx]}"
+        local risk="${ITEM_RISKS[$idx]}"
+        local trashable="${ITEM_TRASHABLE[$idx]}"
+        local path="${ITEM_PATHS[$idx]}"
+        local cmd="${ITEM_CMDS[$idx]}"
+        local size="${ITEM_SIZES[$idx]}"
+
+        # Risky guard
+        if [[ "$risk" == "risky" && "$confirm_risky" != "true" ]]; then
+            _append_result "$(printf '{"id":"%s","success":false,"action":"skipped","message":"Risky item requires --confirm-risky"}' "$(json_escape "$id")")"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        local action_taken=""
+        local success=false
+
+        if [[ "$trashable" == "yes" && "$mode" == "trash" ]]; then
+            if move_to_trash "$path"; then
+                success=true
+                action_taken="trashed"
+            fi
+        else
+            if eval "$cmd" >/dev/null 2>&1; then
+                success=true
+                if [[ "$trashable" == "yes" ]]; then
+                    action_taken="deleted"
+                else
+                    action_taken="cleaned"
+                fi
+            fi
+        fi
+
+        if $success; then
+            succeeded=$((succeeded + 1))
+            space_freed=$((space_freed + size))
+            _append_result "$(printf '{"id":"%s","success":true,"action":"%s","size_bytes":%d}' "$(json_escape "$id")" "$action_taken" "$size")"
+        else
+            failed=$((failed + 1))
+            _append_result "$(printf '{"id":"%s","success":false,"action":"failed","message":"Cleanup command failed (may require sudo or app not running)"}' "$(json_escape "$id")")"
+        fi
+    done
+
+    # Emit JSON
+    printf '{\n'
+    printf '  "results": ['
+    local total="${#EXEC_RESULTS[@]}"
+    local j first=true
+    for ((j=0; j<total; j++)); do
+        if $first; then
+            printf '\n'
+            first=false
+        else
+            printf ',\n'
+        fi
+        printf '    %s' "${EXEC_RESULTS[$j]}"
+    done
+    if ! $first; then printf '\n  '; fi
+    printf '],\n'
+    printf '  "summary": {\n'
+    printf '    "succeeded": %d,\n' "$succeeded"
+    printf '    "failed": %d,\n' "$failed"
+    printf '    "skipped": %d,\n' "$skipped"
+    printf '    "space_freed_bytes": %d\n' "$space_freed"
+    printf '  }\n'
+    printf '}\n'
+}
+
+usage() {
+    cat <<'EOF'
+diskclean.sh — Interactive Mac Disk Cleanup Tool
+
+USAGE:
+  diskclean.sh                              Interactive mode (default)
+  diskclean.sh --json                       Scan and print results as JSON
+  diskclean.sh --execute <ids> [opts]       Execute cleanup for given IDs
+  diskclean.sh --help                       Show this message
+
+EXECUTE OPTIONS:
+  --execute <id1,id2,...>     Comma-separated item IDs (from --json output)
+  --mode <trash|delete>       Default: trash (where supported)
+  --confirm-risky             Required to execute items marked "risky"
+
+EXAMPLES:
+  diskclean.sh --json | jq '.items[] | select(.risk=="safe")'
+  diskclean.sh --execute xcode-deriveddata,homebrew-cache --mode delete
+  diskclean.sh --execute android-sdk --confirm-risky
+
+JSON/execute modes are non-interactive and produce no prompts. Items
+requiring sudo will fail in non-interactive mode — run those manually.
+EOF
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    banner
-    printf "  ${BOLD}Escaneando tu disco...${NC}\n\n"
+    local action="interactive"
+    local execute_ids=""
+    local exec_mode="trash"
+    local confirm_risky="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                action="json"
+                JSON_MODE=true
+                shift
+                ;;
+            --execute)
+                action="execute"
+                JSON_MODE=true
+                execute_ids="${2:-}"
+                if [[ -z "$execute_ids" || "$execute_ids" == --* ]]; then
+                    echo "Error: --execute requires comma-separated IDs" >&2
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --mode)
+                exec_mode="${2:-}"
+                if [[ "$exec_mode" != "trash" && "$exec_mode" != "delete" ]]; then
+                    echo "Error: --mode must be 'trash' or 'delete'" >&2
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --confirm-risky)
+                confirm_risky="true"
+                shift
+                ;;
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "Error: unknown option '$1'" >&2
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+
+    if [[ "$JSON_MODE" != "true" ]]; then
+        banner
+        printf "  ${BOLD}Escaneando tu disco...${NC}\n\n"
+    fi
 
     scan_trash
     scan_system_caches
@@ -1026,15 +1296,28 @@ main() {
     scan_downloads
     scan_misc
 
-    printf "\r%-70s\n" " "  # Clear spinner line
-
-    if (( ITEM_COUNT == 0 )); then
-        printf "  ${GREEN}${BOLD}¡Tu disco está limpio! No se encontraron items significativos.${NC}\n\n"
-        exit 0
+    if [[ "$JSON_MODE" != "true" ]]; then
+        printf "\r%-70s\n" " "  # Clear spinner line
     fi
 
-    display_summary
-    interactive_menu
+    case "$action" in
+        json)
+            output_json_scan
+            exit 0
+            ;;
+        execute)
+            execute_by_ids "$execute_ids" "$exec_mode" "$confirm_risky"
+            exit 0
+            ;;
+        interactive)
+            if (( ITEM_COUNT == 0 )); then
+                printf "  ${GREEN}${BOLD}¡Tu disco está limpio! No se encontraron items significativos.${NC}\n\n"
+                exit 0
+            fi
+            display_summary
+            interactive_menu
+            ;;
+    esac
 }
 
 main "$@"
