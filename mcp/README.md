@@ -1,5 +1,9 @@
 # diskclean-mcp
 
+[![PyPI](https://img.shields.io/pypi/v/diskclean-mcp)](https://pypi.org/project/diskclean-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/diskclean-mcp)](https://pypi.org/project/diskclean-mcp/)
+[![License](https://img.shields.io/pypi/l/diskclean-mcp)](../LICENSE)
+
 MCP server that wraps [`diskclean.sh`](../diskclean.sh), letting agents like Claude Desktop, Claude Code, or any MCP client scan and clean a Mac's reclaimable disk space — with safety guardrails baked in.
 
 ## Tools exposed
@@ -10,13 +14,13 @@ MCP server that wraps [`diskclean.sh`](../diskclean.sh), letting agents like Cla
 | `clean_items(ids, mode, confirm_risky)` | `{ results, summary }` | Destructive. Defaults to Trash; risky items gated by flag. |
 | `disk_status()` | `{ total, used, available }` | Cheap, no full scan. Good for before/after checks. |
 
-## Quick start (uvx, once published)
+## Quick start
 
 ```bash
 uvx diskclean-mcp
 ```
 
-> Not yet on PyPI — for now, use the **dev install** below.
+That's it — zero install. The server runs on stdio, ready for any MCP client to connect.
 
 ### Add to Claude Desktop
 

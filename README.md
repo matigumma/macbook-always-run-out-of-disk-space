@@ -1,10 +1,17 @@
 # macbook-always-run-out-of-disk-space
 
+[![PyPI](https://img.shields.io/pypi/v/diskclean-mcp?label=mcp%20server)](https://pypi.org/project/diskclean-mcp/)
+[![License](https://img.shields.io/github/license/matigumma/macbook-always-run-out-of-disk-space)](LICENSE)
+[![Shell](https://img.shields.io/badge/shell-bash-89e051)](diskclean.sh)
+[![macOS](https://img.shields.io/badge/macOS-Catalina%2B-lightgrey)](#requisitos)
+
 > Limpieza interactiva de disco para macOS. Te dice qué se puede borrar, cuánto pesa, y qué tan riesgoso es — antes de tocar nada.
 
 Si sos developer en una Mac, ya sabés cómo termina la historia: `DerivedData` come 40 GB, `node_modules` esparcidos por todos lados, simuladores de iOS que no usás desde hace meses, modelos de LLM que descargaste "para probar". Este script escanea todo eso, lo agrupa por riesgo, y te deja elegir qué borrar — con red de seguridad (papelera + doble confirmación).
 
 Hecho en Bash puro, sin dependencias, sin instalación. Un solo archivo.
+
+> 🤖 **¿Usás Claude Code o Claude Desktop?** Hay un MCP server publicado en PyPI: [`diskclean-mcp`](https://pypi.org/project/diskclean-mcp/). Tu agent puede escanear y limpiar el disco con tools nativas. Ver [`mcp/README.md`](mcp/README.md).
 
 ---
 
