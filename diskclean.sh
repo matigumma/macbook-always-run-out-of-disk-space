@@ -979,12 +979,11 @@ execute_cleanup() {
                     skipped=$((skipped + 1))
                     continue
                     ;;
-                *)  # Default to trash for risky/moderate, delete for safe
-                    if [[ "$risk" == "safe" ]]; then
-                        use_trash=false
-                    else
-                        use_trash=true
-                    fi
+                *)  # Default on empty/unknown input → Trash (safer than permanent delete).
+                    # Previous behavior was: SAFE items default to delete. That meant a
+                    # distracted user hitting Enter could lose data permanently. Trash is
+                    # recoverable; the user can always type `d` if they want delete.
+                    use_trash=true
                     ;;
             esac
         fi
